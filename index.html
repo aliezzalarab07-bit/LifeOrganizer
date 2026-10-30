@@ -1,0 +1,1009 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LifeOrganizer - All-in-One Personal Hub</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Google Fonts (Inter) -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: rgba(0, 0, 0, 0.05); }
+        ::-webkit-scrollbar-thumb { background: rgba(156, 163, 175, 0.5); border-radius: 9999px; }
+        ::-webkit-scrollbar-thumb:hover { background: rgba(107, 114, 128, 0.8); }
+        .pulse-mic { animation: pulse-red 1.5s infinite; }
+        @keyframes pulse-red {
+            0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
+            70% { transform: scale(1.05); box-shadow: 0 0 0 10px rgba(239, 68, 68, 0); }
+            100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+        }
+    </style>
+
+    <!-- Firebase App Modules -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, onSnapshot, setDoc, collection } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Firebase Configuration & Global Setup
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'life-organizer-default';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
+            apiKey: "demo-api-key",
+            authDomain: "demo-app.firebaseapp.com",
+            projectId: "demo-app",
+            storageBucket: "demo-app.appspot.com",
+            messagingSenderId: "000000000",
+            appId: "1:000000000:web:000000000"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+
+        window.db = db;
+        window.auth = auth;
+        window.appId = appId;
+
+        // Initialize Authentication & Firestore Realtime Sync
+        async function initAuth() {
+            try {
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+            } catch (err) {
+                console.warn("Auth initialization warning, fallback to anonymous session:", err);
+            }
+        }
+
+        onAuthStateChanged(auth, (user) => {
+            if (user) {
+                window.currentUser = user;
+                document.getElementById('user-id-display').innerText = `ID: ${user.uid.slice(0, 8)}...`;
+                setupRealtimeSync(user.uid);
+            }
+        });
+
+        function setupRealtimeSync(uid) {
+            const docRef = doc(db, 'artifacts', appId, 'users', uid, 'data', 'organizerState');
+            
+            // Listen to real-time changes across devices
+            onSnapshot(docRef, (docSnap) => {
+                if (docSnap.exists()) {
+                    const data = docSnap.data();
+                    if (data.tasks) { window.tasks = data.tasks; window.renderTasks(); window.renderCalendar(); }
+                    if (data.finances) { window.finances = data.finances; window.renderFinances(); }
+                    if (data.shopping) { window.shopping = data.shopping; window.renderShopping(); }
+                } else {
+                    // Seed initial state if new document
+                    window.saveToCloud();
+                }
+            }, (error) => {
+                console.error("Firestore sync error:", error);
+            });
+        }
+
+        window.saveToCloud = async function() {
+            if (!window.currentUser) return;
+            const uid = window.currentUser.uid;
+            const docRef = doc(db, 'artifacts', appId, 'users', uid, 'data', 'organizerState');
+            try {
+                await setDoc(docRef, {
+                    tasks: window.tasks || [],
+                    finances: window.finances || [],
+                    shopping: window.shopping || [],
+                    updatedAt: new Date().toISOString()
+                }, { merge: true });
+            } catch (e) {
+                console.error("Cloud save failed:", e);
+            }
+        };
+
+        initAuth();
+    </script>
+</head>
+<body class="bg-slate-50 text-slate-800 min-h-screen flex flex-col md:flex-row antialiased selection:bg-indigo-500 selection:text-white">
+
+    <!-- Mobile Header Navigation -->
+    <div class="md:hidden bg-slate-900 text-white p-4 flex items-center justify-between shadow-lg sticky top-0 z-50">
+        <div class="flex items-center space-x-3">
+            <div class="w-9 h-9 rounded-xl bg-gradient-to-tr from-indigo-500 to-purple-500 flex items-center justify-center font-bold text-white shadow-sm">
+                AR
+            </div>
+            <div>
+                <h1 class="font-bold text-sm leading-tight">LifeOrganizer</h1>
+                <p class="text-[10px] text-slate-400" id="user-id-display">Connecting...</p>
+            </div>
+        </div>
+        <div class="flex bg-slate-800 p-1 rounded-lg text-xs space-x-1 overflow-x-auto">
+            <button onclick="switchTab('tasks')" id="mob-btn-tasks" class="px-2.5 py-1.5 rounded-md font-medium text-white bg-indigo-600">Tasks</button>
+            <button onclick="switchTab('calendar')" id="mob-btn-calendar" class="px-2.5 py-1.5 rounded-md font-medium text-slate-400">Calendar</button>
+            <button onclick="switchTab('shopping')" id="mob-btn-shopping" class="px-2.5 py-1.5 rounded-md font-medium text-slate-400">Shop</button>
+            <button onclick="switchTab('finance')" id="mob-btn-finance" class="px-2.5 py-1.5 rounded-md font-medium text-slate-400">Finance</button>
+        </div>
+    </div>
+
+    <!-- Desktop Sidebar -->
+    <aside class="hidden md:flex flex-col w-64 bg-slate-900 text-white p-6 justify-between flex-shrink-0 min-h-screen">
+        <div>
+            <!-- Branding -->
+            <div class="flex items-center space-x-3 mb-8">
+                <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-indigo-500 to-purple-500 flex items-center justify-center font-bold text-xl text-white shadow-md">
+                    AR
+                </div>
+                <div>
+                    <h1 class="font-bold text-lg leading-tight">LifeOrganizer</h1>
+                    <p class="text-xs text-slate-400">Designed by Alfre Rempe</p>
+                </div>
+            </div>
+
+            <!-- Navigation Links -->
+            <nav class="space-y-2">
+                <button id="nav-tasks" onclick="switchTab('tasks')" class="w-full flex items-center space-x-3 px-4 py-3 rounded-xl font-medium transition-all bg-indigo-600 text-white shadow-lg shadow-indigo-600/30">
+                    <i class="fa-solid fa-list-check w-5 text-center"></i>
+                    <span>Tasks & Routine</span>
+                </button>
+                <button id="nav-calendar" onclick="switchTab('calendar')" class="w-full flex items-center space-x-3 px-4 py-3 rounded-xl font-medium transition-all text-slate-400 hover:bg-slate-800 hover:text-white">
+                    <i class="fa-regular fa-calendar-days w-5 text-center"></i>
+                    <span>Calendar</span>
+                </button>
+                <button id="nav-shopping" onclick="switchTab('shopping')" class="w-full flex items-center space-x-3 px-4 py-3 rounded-xl font-medium transition-all text-slate-400 hover:bg-slate-800 hover:text-white">
+                    <i class="fa-solid fa-cart-shopping w-5 text-center"></i>
+                    <span>Shopping List</span>
+                </button>
+                <button id="nav-finance" onclick="switchTab('finance')" class="w-full flex items-center space-x-3 px-4 py-3 rounded-xl font-medium transition-all text-slate-400 hover:bg-slate-800 hover:text-white">
+                    <i class="fa-solid fa-wallet w-5 text-center"></i>
+                    <span>Finance Tracker</span>
+                </button>
+            </nav>
+        </div>
+
+        <!-- Voice Assistant & Cloud Sync Status -->
+        <div class="space-y-3">
+            <button id="mic-btn-desktop" onclick="toggleVoiceAssistant()" class="w-full bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 py-2.5 px-4 rounded-xl text-xs font-semibold flex items-center justify-between transition-all">
+                <span class="flex items-center space-x-2">
+                    <i class="fa-solid fa-microphone text-indigo-400" id="mic-icon-desktop"></i>
+                    <span>Voice Command</span>
+                </span>
+                <span class="text-[10px] bg-indigo-500/20 text-indigo-300 px-2 py-0.5 rounded-full" id="mic-status-badge">Tap to speak</span>
+            </button>
+
+            <div class="bg-slate-800/60 rounded-xl p-3.5 border border-slate-700/50 backdrop-blur-sm">
+                <div class="flex items-center justify-between text-xs text-slate-400 mb-1">
+                    <span class="font-semibold uppercase tracking-wider text-[10px]">Cloud Sync</span>
+                    <span class="inline-block w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                </div>
+                <div class="text-xs font-bold text-slate-200" id="current-date-label">---</div>
+            </div>
+        </div>
+    </aside>
+
+    <!-- Main Content Area -->
+    <main class="flex-1 p-4 sm:p-6 lg:p-8 max-w-6xl mx-auto w-full overflow-y-auto">
+
+        <!-- Header Greeting & Quick Voice Trigger -->
+        <header class="mb-6 sm:mb-8 flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-5 rounded-2xl shadow-sm border border-slate-100">
+            <div>
+                <h2 class="text-2xl font-bold text-slate-900" id="greeting-text">Welcome back!</h2>
+                <p class="text-slate-500 text-sm mt-0.5">Organize your routines, schedule, shopping, and finances seamlessly.</p>
+            </div>
+            <div class="flex items-center space-x-3">
+                <button onclick="toggleVoiceAssistant()" class="md:hidden bg-indigo-50 text-indigo-600 border border-indigo-200 p-2.5 rounded-xl text-xs font-semibold flex items-center space-x-2">
+                    <i class="fa-solid fa-microphone" id="mic-icon-mobile"></i>
+                    <span>Voice Assistant</span>
+                </button>
+                <div class="flex items-center space-x-2 text-sm text-slate-500 bg-slate-50 px-3 py-2 rounded-xl border border-slate-200/60">
+                    <i class="fa-regular fa-clock text-indigo-500"></i>
+                    <span id="live-clock">--:-- --</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- VOICE COMMAND BANNER (Active status) -->
+        <div id="voice-banner" class="hidden mb-6 bg-gradient-to-r from-indigo-900 to-slate-900 text-white p-4 rounded-2xl shadow-lg border border-indigo-500/30 flex items-center justify-between">
+            <div class="flex items-center space-x-3">
+                <div class="w-10 h-10 rounded-xl bg-rose-500 text-white flex items-center justify-center pulse-mic">
+                    <i class="fa-solid fa-microphone text-lg"></i>
+                </div>
+                <div>
+                    <h4 class="font-bold text-sm">Voice Listening Active</h4>
+                    <p class="text-xs text-indigo-200" id="voice-transcript">Say e.g. "Add task brush teeth", "Add expense 15 dollars", or "Add milk to shopping list"</p>
+                </div>
+            </div>
+            <button onclick="toggleVoiceAssistant()" class="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-lg border border-slate-700">Stop</button>
+        </div>
+
+        <!-- SECTION 1: TASKS & HABITS TRACKER -->
+        <section id="section-tasks" class="space-y-6">
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div class="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between">
+                    <div>
+                        <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Total Tasks</p>
+                        <h3 class="text-2xl font-bold text-slate-800 mt-1" id="stat-total-tasks">0</h3>
+                    </div>
+                    <div class="w-12 h-12 bg-indigo-50 text-indigo-600 rounded-xl flex items-center justify-center text-xl">
+                        <i class="fa-solid fa-list-ul"></i>
+                    </div>
+                </div>
+                <div class="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between">
+                    <div>
+                        <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Completed</p>
+                        <h3 class="text-2xl font-bold text-emerald-600 mt-1" id="stat-completed-tasks">0</h3>
+                    </div>
+                    <div class="w-12 h-12 bg-emerald-50 text-emerald-600 rounded-xl flex items-center justify-center text-xl">
+                        <i class="fa-solid fa-circle-check"></i>
+                    </div>
+                </div>
+                <div class="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between">
+                    <div>
+                        <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Progress Rate</p>
+                        <h3 class="text-2xl font-bold text-purple-600 mt-1" id="stat-progress-percent">0%</h3>
+                    </div>
+                    <div class="w-12 h-12 bg-purple-50 text-purple-600 rounded-xl flex items-center justify-center text-xl">
+                        <i class="fa-solid fa-chart-line"></i>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Progress Bar Card -->
+            <div class="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-2">
+                <div class="flex justify-between text-xs font-semibold text-slate-600">
+                    <span>Daily Progress</span>
+                    <span id="progress-text">0 / 0 completed</span>
+                </div>
+                <div class="w-full bg-slate-100 h-3 rounded-full overflow-hidden">
+                    <div id="progress-bar-fill" class="bg-gradient-to-r from-indigo-500 to-emerald-400 h-full rounded-full transition-all duration-500 w-0"></div>
+                </div>
+            </div>
+
+            <!-- Tasks Container -->
+            <div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+                <div class="p-4 sm:p-5 border-b border-slate-100 bg-slate-50/50">
+                    <form id="add-task-form" onsubmit="handleAddTask(event)" class="flex flex-col sm:flex-row gap-3">
+                        <div class="relative flex-1">
+                            <i class="fa-solid fa-plus text-slate-400 absolute left-4 top-1/2 transform -translate-y-1/2"></i>
+                            <input type="text" id="task-input-title" placeholder="Add task or habit..." required
+                                class="w-full pl-10 pr-4 py-2.5 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm bg-white">
+                        </div>
+                        <input type="date" id="task-input-date" class="px-3 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white text-slate-700">
+                        <select id="task-input-category" class="px-3 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white text-slate-700">
+                            <option value="routine">Routine</option>
+                            <option value="health">Health & Fitness</option>
+                            <option value="work">Work & Study</option>
+                            <option value="personal">Personal</option>
+                        </select>
+                        <button type="submit" class="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2.5 rounded-xl font-medium text-sm transition-all shadow-md shadow-indigo-500/20">
+                            Add Task
+                        </button>
+                    </form>
+                </div>
+
+                <div class="px-5 py-3 border-b border-slate-100 flex items-center justify-between text-xs font-medium text-slate-500 bg-white">
+                    <div class="flex space-x-2">
+                        <button onclick="setTaskFilter('all')" id="filter-all" class="px-3 py-1 rounded-lg bg-slate-900 text-white">All</button>
+                        <button onclick="setTaskFilter('active')" id="filter-active" class="px-3 py-1 rounded-lg hover:bg-slate-100 text-slate-600">Active</button>
+                        <button onclick="setTaskFilter('completed')" id="filter-completed" class="px-3 py-1 rounded-lg hover:bg-slate-100 text-slate-600">Completed</button>
+                    </div>
+                    <button onclick="resetRoutine()" class="text-indigo-600 hover:text-indigo-800 text-xs font-semibold flex items-center space-x-1">
+                        <i class="fa-solid fa-rotate-right"></i>
+                        <span class="hidden sm:inline">Reset Daily Progress</span>
+                    </button>
+                </div>
+
+                <ul id="tasks-list" class="divide-y divide-slate-100 min-h-[150px]"></ul>
+            </div>
+        </section>
+
+        <!-- SECTION 2: CALENDAR VIEW -->
+        <section id="section-calendar" class="space-y-6 hidden">
+            <div class="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm">
+                <div class="flex items-center justify-between mb-6">
+                    <h3 class="text-lg font-bold text-slate-900" id="calendar-month-year">Month Year</h3>
+                    <div class="flex space-x-2">
+                        <button onclick="changeMonth(-1)" class="p-2 border border-slate-200 rounded-xl hover:bg-slate-50 text-slate-600 text-xs">
+                            <i class="fa-solid fa-chevron-left"></i>
+                        </button>
+                        <button onclick="changeMonth(0)" class="px-3 py-1 border border-slate-200 rounded-xl hover:bg-slate-50 text-slate-600 text-xs font-medium">
+                            Today
+                        </button>
+                        <button onclick="changeMonth(1)" class="p-2 border border-slate-200 rounded-xl hover:bg-slate-50 text-slate-600 text-xs">
+                            <i class="fa-solid fa-chevron-right"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Calendar Days Header -->
+                <div class="grid grid-cols-7 gap-1 text-center text-xs font-semibold text-slate-400 mb-2">
+                    <div>Sun</div><div>Mon</div><div>Tue</div><div>Wed</div><div>Thu</div><div>Fri</div><div>Sat</div>
+                </div>
+
+                <!-- Calendar Days Grid -->
+                <div id="calendar-grid" class="grid grid-cols-7 gap-2"></div>
+            </div>
+        </section>
+
+        <!-- SECTION 3: SHOPPING LIST -->
+        <section id="section-shopping" class="space-y-6 hidden">
+            <div class="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm">
+                <h3 class="text-base font-bold text-slate-900 mb-4 flex items-center space-x-2">
+                    <i class="fa-solid fa-cart-plus text-indigo-600"></i>
+                    <span>Add Shopping Item</span>
+                </h3>
+                <form id="add-shopping-form" onsubmit="handleShoppingSubmit(event)" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+                    <div class="lg:col-span-2">
+                        <input type="text" id="shop-title" placeholder="Item name (e.g. Milk, Apples)" required
+                            class="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                    </div>
+                    <div>
+                        <input type="number" id="shop-qty" min="1" value="1" placeholder="Qty" required
+                            class="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                    </div>
+                    <div>
+                        <input type="number" id="shop-price" step="0.01" min="0" placeholder="Est. Price ($)"
+                            class="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                    </div>
+                    <div>
+                        <button type="submit" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-2.5 rounded-xl text-sm transition-all shadow-md shadow-indigo-500/20">
+                            Add Item
+                        </button>
+                    </div>
+                </form>
+            </div>
+
+            <div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+                <div class="p-5 border-b border-slate-100 flex items-center justify-between">
+                    <div>
+                        <h3 class="text-base font-bold text-slate-900">Your Shopping List</h3>
+                        <p class="text-xs text-slate-400 mt-0.5" id="shopping-summary-text">0 items pending</p>
+                    </div>
+                    <span class="text-base font-bold text-indigo-600 bg-indigo-50 px-3 py-1 rounded-xl" id="shopping-total-est">$0.00</span>
+                </div>
+                <ul id="shopping-list" class="divide-y divide-slate-100 min-h-[120px]"></ul>
+            </div>
+        </section>
+
+        <!-- SECTION 4: FINANCE TRACKER -->
+        <section id="section-finance" class="space-y-6 hidden">
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div class="bg-gradient-to-br from-slate-900 to-slate-800 text-white p-5 rounded-2xl shadow-md">
+                    <p class="text-xs font-medium text-slate-400 uppercase tracking-wider">Net Balance</p>
+                    <h3 class="text-2xl font-bold mt-1" id="fin-net-balance">$0.00</h3>
+                    <div class="mt-2 text-xs text-slate-300 flex items-center space-x-1">
+                        <i class="fa-solid fa-wallet text-indigo-400"></i>
+                        <span>Synced Cash Flow</span>
+                    </div>
+                </div>
+                <div class="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm">
+                    <div class="flex items-center justify-between">
+                        <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Total Income</p>
+                        <span class="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center text-sm"><i class="fa-solid fa-arrow-down"></i></span>
+                    </div>
+                    <h3 class="text-2xl font-bold text-emerald-600 mt-1" id="fin-total-income">$0.00</h3>
+                </div>
+                <div class="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm">
+                    <div class="flex items-center justify-between">
+                        <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Total Expenses</p>
+                        <span class="w-8 h-8 rounded-lg bg-rose-50 text-rose-600 flex items-center justify-center text-sm"><i class="fa-solid fa-arrow-up"></i></span>
+                    </div>
+                    <h3 class="text-2xl font-bold text-rose-600 mt-1" id="fin-total-expense">$0.00</h3>
+                </div>
+            </div>
+
+            <div class="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm">
+                <h3 class="text-base font-bold text-slate-900 mb-4 flex items-center space-x-2">
+                    <i class="fa-solid fa-circle-plus text-indigo-600"></i>
+                    <span>Record New Transaction</span>
+                </h3>
+                <form id="add-finance-form" onsubmit="handleFinanceSubmit(event)" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+                    <div class="lg:col-span-2">
+                        <input type="text" id="fin-title" placeholder="Description (e.g. Salary, Grocery)" required
+                            class="w-full px-3.5 py-2 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                    </div>
+                    <div>
+                        <input type="number" id="fin-amount" step="0.01" min="0.01" placeholder="Amount ($)" required
+                            class="w-full px-3.5 py-2 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                    </div>
+                    <div>
+                        <select id="fin-type" class="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white">
+                            <option value="expense">Expense (-)</option>
+                            <option value="income">Income (+)</option>
+                        </select>
+                    </div>
+                    <div>
+                        <button type="submit" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-2 rounded-xl text-sm transition-all shadow-md shadow-indigo-500/20">
+                            Add Record
+                        </button>
+                    </div>
+                </form>
+            </div>
+
+            <div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+                <div class="p-5 border-b border-slate-100 flex items-center justify-between">
+                    <h3 class="text-base font-bold text-slate-900">Recent Transactions</h3>
+                    <button onclick="clearFinanceHistory()" class="text-xs font-semibold text-slate-400 hover:text-rose-600 transition-colors">Clear History</button>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left border-collapse">
+                        <thead>
+                            <tr class="bg-slate-50 text-slate-400 uppercase text-[10px] tracking-wider font-semibold border-b border-slate-100">
+                                <th class="py-3 px-5">Description</th>
+                                <th class="py-3 px-5">Type</th>
+                                <th class="py-3 px-5">Date</th>
+                                <th class="py-3 px-5 text-right">Amount</th>
+                                <th class="py-3 px-5 text-center">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="finance-table-body" class="divide-y divide-slate-100 text-sm"></tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- Notification Toast -->
+    <div id="toast" class="fixed bottom-5 right-5 bg-slate-900 text-white text-sm px-4 py-3 rounded-xl shadow-xl flex items-center space-x-3 transition-all duration-300 opacity-0 translate-y-10 pointer-events-none z-50">
+        <i id="toast-icon" class="fa-solid fa-circle-info text-indigo-400"></i>
+        <span id="toast-msg">Notification message</span>
+    </div>
+
+    <!-- JavaScript Application Logic -->
+    <script>
+        // Default Seed Data
+        const defaultTasks = [
+            { id: 1, title: 'Exercises', category: 'health', completed: false, date: new Date().toISOString().split('T')[0] },
+            { id: 2, title: 'Brushing Teeth', category: 'routine', completed: true, date: new Date().toISOString().split('T')[0] },
+            { id: 3, title: 'Read 15 minutes', category: 'personal', completed: false, date: new Date().toISOString().split('T')[0] }
+        ];
+
+        const defaultFinances = [
+            { id: 101, title: 'Freelance Design Work', amount: 250.00, type: 'income', date: new Date().toISOString() },
+            { id: 102, title: 'Morning Coffee', amount: 8.50, type: 'expense', date: new Date().toISOString() }
+        ];
+
+        const defaultShopping = [
+            { id: 201, title: 'Milk & Eggs', qty: 1, price: 6.50, bought: false },
+            { id: 202, title: 'Fresh Vegetables', qty: 2, price: 12.00, bought: false }
+        ];
+
+        // State variables
+        window.tasks = defaultTasks;
+        window.finances = defaultFinances;
+        window.shopping = defaultShopping;
+        
+        let currentFilter = 'all';
+        let calendarDate = new Date();
+        let isListening = false;
+        let recognition = null;
+
+        window.onload = function() {
+            updateClock();
+            setInterval(updateClock, 1000);
+            setupDateDisplay();
+            initVoiceRecognition();
+            
+            // Set default date input for tasks to today
+            document.getElementById('task-input-date').value = new Date().toISOString().split('T')[0];
+
+            renderTasks();
+            renderFinances();
+            renderShopping();
+            renderCalendar();
+        };
+
+        function updateClock() {
+            const now = new Date();
+            document.getElementById('live-clock').innerText = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        }
+
+        function setupDateDisplay() {
+            const now = new Date();
+            document.getElementById('current-date-label').innerText = now.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+            
+            const hour = now.getHours();
+            let greeting = 'Good Morning';
+            if (hour >= 12 && hour < 17) greeting = 'Good Afternoon';
+            else if (hour >= 17) greeting = 'Good Evening';
+            document.getElementById('greeting-text').innerText = `${greeting}, Ready for today?`;
+        }
+
+        // Tab Switcher
+        window.switchTab = function(tabName) {
+            ['tasks', 'calendar', 'shopping', 'finance'].forEach(t => {
+                document.getElementById(`section-${t}`).classList.add('hidden');
+                
+                // Desktop navs
+                const navDesk = document.getElementById(`nav-${t}`);
+                if (navDesk) {
+                    navDesk.className = t === tabName 
+                        ? "w-full flex items-center space-x-3 px-4 py-3 rounded-xl font-medium transition-all bg-indigo-600 text-white shadow-lg shadow-indigo-600/30"
+                        : "w-full flex items-center space-x-3 px-4 py-3 rounded-xl font-medium transition-all text-slate-400 hover:bg-slate-800 hover:text-white";
+                }
+
+                // Mobile navs
+                const navMob = document.getElementById(`mob-btn-${t}`);
+                if (navMob) {
+                    navMob.className = t === tabName 
+                        ? "px-2.5 py-1.5 rounded-md font-medium text-white bg-indigo-600"
+                        : "px-2.5 py-1.5 rounded-md font-medium text-slate-400";
+                }
+            });
+
+            document.getElementById(`section-${tabName}`).classList.remove('hidden');
+            if (tabName === 'calendar') renderCalendar();
+        }
+
+        // --- TASK MANAGEMENT ---
+        window.handleAddTask = function(e) {
+            e.preventDefault();
+            const titleInput = document.getElementById('task-input-title');
+            const categorySelect = document.getElementById('task-input-category');
+            const dateInput = document.getElementById('task-input-date');
+
+            if (!titleInput.value.trim()) return;
+
+            const newTask = {
+                id: Date.now(),
+                title: titleInput.value.trim(),
+                category: categorySelect.value,
+                completed: false,
+                date: dateInput.value || new Date().toISOString().split('T')[0]
+            };
+
+            window.tasks.unshift(newTask);
+            saveDataAndSync();
+            renderTasks();
+            titleInput.value = '';
+            showToast('Task added!', 'success');
+        };
+
+        window.toggleTask = function(id) {
+            window.tasks = window.tasks.map(t => t.id === id ? { ...t, completed: !t.completed } : t);
+            saveDataAndSync();
+            renderTasks();
+        };
+
+        window.deleteTask = function(id) {
+            window.tasks = window.tasks.filter(t => t.id !== id);
+            saveDataAndSync();
+            renderTasks();
+            showToast('Task deleted', 'info');
+        };
+
+        window.setTaskFilter = function(filter) {
+            currentFilter = filter;
+            document.querySelectorAll('#filter-all, #filter-active, #filter-completed').forEach(b => {
+                b.className = "px-3 py-1 rounded-lg hover:bg-slate-100 text-slate-600";
+            });
+            document.getElementById(`filter-${filter}`).className = "px-3 py-1 rounded-lg bg-slate-900 text-white";
+            renderTasks();
+        };
+
+        window.resetRoutine = function() {
+            window.tasks = window.tasks.map(t => ({ ...t, completed: false }));
+            saveDataAndSync();
+            renderTasks();
+            showToast('Daily progress reset!', 'info');
+        };
+
+        window.renderTasks = function() {
+            const listEl = document.getElementById('tasks-list');
+            let filtered = window.tasks;
+            if (currentFilter === 'active') filtered = window.tasks.filter(t => !t.completed);
+            if (currentFilter === 'completed') filtered = window.tasks.filter(t => t.completed);
+
+            listEl.innerHTML = '';
+            if (filtered.length === 0) {
+                listEl.innerHTML = `<li class="py-10 text-center text-slate-400 text-sm">No tasks found.</li>`;
+            } else {
+                filtered.forEach(task => {
+                    const li = document.createElement('li');
+                    li.className = "p-4 hover:bg-slate-50 transition-colors flex items-center justify-between group";
+                    li.innerHTML = `
+                        <div class="flex items-center space-x-3 flex-1 min-w-0 pr-4">
+                            <button onclick="toggleTask(${task.id})" class="w-6 h-6 rounded-lg border-2 flex items-center justify-center transition-all ${
+                                task.completed ? 'bg-emerald-500 border-emerald-500 text-white' : 'border-slate-300 text-transparent'
+                            }">
+                                <i class="fa-solid fa-check text-xs"></i>
+                            </button>
+                            <span class="text-sm font-medium ${task.completed ? 'line-through text-slate-400' : 'text-slate-700'} truncate">
+                                ${escapeHtml(task.title)}
+                            </span>
+                            <span class="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 capitalize hidden sm:inline-block">
+                                ${task.category}
+                            </span>
+                        </div>
+                        <button onclick="deleteTask(${task.id})" class="text-slate-300 hover:text-rose-500 p-1">
+                            <i class="fa-solid fa-trash-can text-sm"></i>
+                        </button>
+                    `;
+                    listEl.appendChild(li);
+                });
+            }
+
+            const total = window.tasks.length;
+            const completed = window.tasks.filter(t => t.completed).length;
+            const percent = total === 0 ? 0 : Math.round((completed / total) * 100);
+
+            document.getElementById('stat-total-tasks').innerText = total;
+            document.getElementById('stat-completed-tasks').innerText = completed;
+            document.getElementById('stat-progress-percent').innerText = `${percent}%`;
+            document.getElementById('progress-text').innerText = `${completed} of ${total} completed`;
+            document.getElementById('progress-bar-fill').style.width = `${percent}%`;
+        };
+
+        // --- CALENDAR LOGIC ---
+        window.changeMonth = function(dir) {
+            if (dir === 0) calendarDate = new Date();
+            else calendarDate.setMonth(calendarDate.getMonth() + dir);
+            renderCalendar();
+        };
+
+        window.renderCalendar = function() {
+            const grid = document.getElementById('calendar-grid');
+            if (!grid) return;
+            grid.innerHTML = '';
+
+            const year = calendarDate.getFullYear();
+            const month = calendarDate.getMonth();
+
+            const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+            document.getElementById('calendar-month-year').innerText = `${monthNames[month]} ${year}`;
+
+            const firstDayIndex = new Date(year, month, 1).getDay();
+            const daysInMonth = new Date(year, month + 1, 0).getDate();
+            const todayStr = new Date().toISOString().split('T')[0];
+
+            // Blank padding for month start
+            for (let i = 0; i < firstDayIndex; i++) {
+                const blank = document.createElement('div');
+                blank.className = "h-20 bg-slate-50/50 rounded-xl border border-slate-100/50";
+                grid.appendChild(blank);
+            }
+
+            // Days cells
+            for (let d = 1; d <= daysInMonth; d++) {
+                const dayDate = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+                const dayTasks = window.tasks.filter(t => t.date === dayDate);
+                const isToday = dayDate === todayStr;
+
+                const cell = document.createElement('div');
+                cell.className = `h-20 p-1.5 rounded-xl border flex flex-col justify-between text-xs transition-all ${
+                    isToday ? 'bg-indigo-50/60 border-indigo-200' : 'bg-white border-slate-100 hover:border-slate-200'
+                }`;
+
+                cell.innerHTML = `
+                    <div class="flex justify-between items-center">
+                        <span class="font-bold ${isToday ? 'text-indigo-600 bg-indigo-100 px-1.5 py-0.5 rounded-md' : 'text-slate-700'}">${d}</span>
+                        ${dayTasks.length ? `<span class="text-[9px] bg-indigo-500 text-white font-semibold px-1 rounded-full">${dayTasks.length}</span>` : ''}
+                    </div>
+                    <div class="space-y-0.5 overflow-hidden">
+                        ${dayTasks.slice(0, 2).map(t => `
+                            <div class="text-[9px] truncate px-1 rounded ${t.completed ? 'bg-emerald-100 text-emerald-800 line-through' : 'bg-slate-100 text-slate-700'}">
+                                ${escapeHtml(t.title)}
+                            </div>
+                        `).join('')}
+                    </div>
+                `;
+                grid.appendChild(cell);
+            }
+        };
+
+        // --- SHOPPING LIST LOGIC ---
+        window.handleShoppingSubmit = function(e) {
+            e.preventDefault();
+            const titleInput = document.getElementById('shop-title');
+            const qtyInput = document.getElementById('shop-qty');
+            const priceInput = document.getElementById('shop-price');
+
+            if (!titleInput.value.trim()) return;
+
+            const newItem = {
+                id: Date.now(),
+                title: titleInput.value.trim(),
+                qty: parseInt(qtyInput.value) || 1,
+                price: parseFloat(priceInput.value) || 0,
+                bought: false
+            };
+
+            window.shopping.unshift(newItem);
+            saveDataAndSync();
+            renderShopping();
+
+            titleInput.value = '';
+            qtyInput.value = '1';
+            priceInput.value = '';
+            showToast('Item added to shopping list', 'success');
+        };
+
+        window.toggleShopping = function(id) {
+            window.shopping = window.shopping.map(s => s.id === id ? { ...s, bought: !s.bought } : s);
+            saveDataAndSync();
+            renderShopping();
+        };
+
+        window.deleteShopping = function(id) {
+            window.shopping = window.shopping.filter(s => s.id !== id);
+            saveDataAndSync();
+            renderShopping();
+            showToast('Item removed', 'info');
+        };
+
+        window.renderShopping = function() {
+            const listEl = document.getElementById('shopping-list');
+            if (!listEl) return;
+            listEl.innerHTML = '';
+
+            let totalEst = 0;
+            let pendingCount = 0;
+
+            if (window.shopping.length === 0) {
+                listEl.innerHTML = `<li class="py-8 text-center text-slate-400 text-sm">Shopping list is empty.</li>`;
+            } else {
+                window.shopping.forEach(item => {
+                    if (!item.bought) {
+                        pendingCount++;
+                        totalEst += (item.price * item.qty);
+                    }
+
+                    const li = document.createElement('li');
+                    li.className = "p-4 hover:bg-slate-50 transition-colors flex items-center justify-between";
+                    li.innerHTML = `
+                        <div class="flex items-center space-x-3 flex-1">
+                            <button onclick="toggleShopping(${item.id})" class="w-6 h-6 rounded-lg border-2 flex items-center justify-center ${
+                                item.bought ? 'bg-emerald-500 border-emerald-500 text-white' : 'border-slate-300'
+                            }">
+                                <i class="fa-solid fa-check text-xs"></i>
+                            </button>
+                            <div>
+                                <span class="text-sm font-medium ${item.bought ? 'line-through text-slate-400' : 'text-slate-800'}">
+                                    ${escapeHtml(item.title)}
+                                </span>
+                                <span class="text-xs text-slate-400 ml-2">x${item.qty}</span>
+                            </div>
+                        </div>
+                        <div class="flex items-center space-x-4">
+                            <span class="text-sm font-semibold text-slate-700">$${(item.price * item.qty).toFixed(2)}</span>
+                            <button onclick="deleteShopping(${item.id})" class="text-slate-300 hover:text-rose-500">
+                                <i class="fa-solid fa-trash-can text-sm"></i>
+                            </button>
+                        </div>
+                    `;
+                    listEl.appendChild(li);
+                });
+            }
+
+            document.getElementById('shopping-summary-text').innerText = `${pendingCount} items pending`;
+            document.getElementById('shopping-total-est').innerText = `$${totalEst.toFixed(2)}`;
+        };
+
+        // --- FINANCE LOGIC ---
+        window.handleFinanceSubmit = function(e) {
+            e.preventDefault();
+            const titleInput = document.getElementById('fin-title');
+            const amountInput = document.getElementById('fin-amount');
+            const typeInput = document.getElementById('fin-type');
+
+            const title = titleInput.value.trim();
+            const amount = parseFloat(amountInput.value);
+
+            if (!title || isNaN(amount) || amount <= 0) return;
+
+            window.finances.unshift({
+                id: Date.now(),
+                title: title,
+                amount: amount,
+                type: typeInput.value,
+                date: new Date().toISOString()
+            });
+
+            saveDataAndSync();
+            renderFinances();
+            titleInput.value = '';
+            amountInput.value = '';
+            showToast('Transaction recorded!', 'success');
+        };
+
+        window.deleteFinanceRecord = function(id) {
+            window.finances = window.finances.filter(f => f.id !== id);
+            saveDataAndSync();
+            renderFinances();
+            showToast('Transaction deleted', 'info');
+        };
+
+        window.clearFinanceHistory = function() {
+            window.finances = [];
+            saveDataAndSync();
+            renderFinances();
+            showToast('Finance history cleared', 'info');
+        };
+
+        window.renderFinances = function() {
+            const tbody = document.getElementById('finance-table-body');
+            if (!tbody) return;
+            tbody.innerHTML = '';
+
+            let totalIncome = 0;
+            let totalExpense = 0;
+
+            if (window.finances.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="5" class="py-8 text-center text-slate-400 text-xs">No records yet.</td></tr>`;
+            } else {
+                window.finances.forEach(item => {
+                    if (item.type === 'income') totalIncome += item.amount;
+                    else totalExpense += item.amount;
+
+                    const row = document.createElement('tr');
+                    row.className = "hover:bg-slate-50 transition-colors";
+                    const isIncome = item.type === 'income';
+
+                    row.innerHTML = `
+                        <td class="py-3 px-5 font-medium text-slate-800">${escapeHtml(item.title)}</td>
+                        <td class="py-3 px-5">
+                            <span class="inline-flex px-2 py-0.5 rounded text-[11px] font-semibold ${isIncome ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}">
+                                ${isIncome ? 'Income' : 'Expense'}
+                            </span>
+                        </td>
+                        <td class="py-3 px-5 text-slate-400 text-xs">${new Date(item.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</td>
+                        <td class="py-3 px-5 text-right font-bold ${isIncome ? 'text-emerald-600' : 'text-rose-600'}">
+                            ${isIncome ? '+' : '-'}$${item.amount.toFixed(2)}
+                        </td>
+                        <td class="py-3 px-5 text-center">
+                            <button onclick="deleteFinanceRecord(${item.id})" class="text-slate-300 hover:text-rose-500">
+                                <i class="fa-solid fa-trash-can text-xs"></i>
+                            </button>
+                        </td>
+                    `;
+                    tbody.appendChild(row);
+                });
+            }
+
+            const net = totalIncome - totalExpense;
+            document.getElementById('fin-total-income').innerText = `$${totalIncome.toFixed(2)}`;
+            document.getElementById('fin-total-expense').innerText = `$${totalExpense.toFixed(2)}`;
+            document.getElementById('fin-net-balance').innerText = `${net < 0 ? '-' : ''}$${Math.abs(net).toFixed(2)}`;
+        };
+
+        // --- VOICE COMMAND LOGIC (Web Speech API) ---
+        function initVoiceRecognition() {
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            if (!SpeechRecognition) {
+                console.warn("Speech Recognition not supported on this browser.");
+                return;
+            }
+
+            recognition = new SpeechRecognition();
+            recognition.continuous = false;
+            recognition.interimResults = false;
+            recognition.lang = 'en-US';
+
+            recognition.onstart = function() {
+                isListening = true;
+                document.getElementById('voice-banner').classList.remove('hidden');
+                document.getElementById('mic-status-badge').innerText = "Listening...";
+                document.getElementById('mic-status-badge').className = "text-[10px] bg-rose-500 text-white px-2 py-0.5 rounded-full animate-pulse";
+            };
+
+            recognition.onresult = function(event) {
+                const transcript = event.results[0][0].transcript.toLowerCase().trim();
+                document.getElementById('voice-transcript').innerText = `"${transcript}"`;
+                processVoiceCommand(transcript);
+            };
+
+            recognition.onerror = function() {
+                stopVoice();
+            };
+
+            recognition.onend = function() {
+                stopVoice();
+            };
+        }
+
+        window.toggleVoiceAssistant = function() {
+            if (!recognition) {
+                showToast("Voice Recognition is not supported by your browser.", "info");
+                return;
+            }
+            if (isListening) recognition.stop();
+            else recognition.start();
+        };
+
+        function stopVoice() {
+            isListening = false;
+            document.getElementById('voice-banner').classList.add('hidden');
+            document.getElementById('mic-status-badge').innerText = "Tap to speak";
+            document.getElementById('mic-status-badge').className = "text-[10px] bg-indigo-500/20 text-indigo-300 px-2 py-0.5 rounded-full";
+        }
+
+        function processVoiceCommand(cmd) {
+            // Voice Command 1: Add task
+            if (cmd.startsWith("add task") || cmd.startsWith("add habit") || cmd.startsWith("task")) {
+                let taskName = cmd.replace(/^(add task|add habit|task)/, '').trim();
+                if (taskName) {
+                    window.tasks.unshift({
+                        id: Date.now(),
+                        title: taskName,
+                        category: 'routine',
+                        completed: false,
+                        date: new Date().toISOString().split('T')[0]
+                    });
+                    saveDataAndSync();
+                    renderTasks();
+                    speakResponse(`Added task ${taskName}`);
+                    showToast(`Voice: Added task "${taskName}"`, "success");
+                }
+            } 
+            // Voice Command 2: Add expense / finance
+            else if (cmd.includes("expense") || cmd.includes("spent") || cmd.includes("paid")) {
+                const match = cmd.match(/(\d+(\.\d+)?)/);
+                const amount = match ? parseFloat(match[0]) : 10.0;
+                let desc = cmd.replace(/(\d+(\.\d+)?)/, '').replace(/(add|expense|spent|paid|dollars|dollar|for)/g, '').trim() || "Voice Expense";
+                
+                window.finances.unshift({
+                    id: Date.now(),
+                    title: desc,
+                    amount: amount,
+                    type: 'expense',
+                    date: new Date().toISOString()
+                });
+                saveDataAndSync();
+                renderFinances();
+                speakResponse(`Recorded expense of ${amount} dollars for ${desc}`);
+                showToast(`Voice: Recorded $${amount} expense`, "success");
+            }
+            // Voice Command 3: Add to shopping list
+            else if (cmd.includes("shopping") || cmd.includes("buy") || cmd.includes("add to list")) {
+                let itemName = cmd.replace(/(add|to|shopping|list|buy)/g, '').trim();
+                if (itemName) {
+                    window.shopping.unshift({
+                        id: Date.now(),
+                        title: itemName,
+                        qty: 1,
+                        price: 0,
+                        bought: false
+                    });
+                    saveDataAndSync();
+                    renderShopping();
+                    speakResponse(`Added ${itemName} to shopping list`);
+                    showToast(`Voice: Added "${itemName}" to shopping list`, "success");
+                }
+            } else {
+                speakResponse("Sorry, I couldn't recognize that command. Try saying add task, add expense, or add to shopping list.");
+            }
+        }
+
+        function speakResponse(text) {
+            if ('speechSynthesis' in window) {
+                const utterance = new SpeechSynthesisUtterance(text);
+                window.speechSynthesis.speak(utterance);
+            }
+        }
+
+        // --- UTILS & DATA SYNC ---
+        function saveDataAndSync() {
+            if (window.saveToCloud) window.saveToCloud();
+        }
+
+        function showToast(msg, type = 'info') {
+            const toast = document.getElementById('toast');
+            document.getElementById('toast-msg').innerText = msg;
+            toast.classList.remove('opacity-0', 'translate-y-10', 'pointer-events-none');
+            toast.classList.add('opacity-100', 'translate-y-0');
+            setTimeout(() => {
+                toast.classList.remove('opacity-100', 'translate-y-0');
+                toast.classList.add('opacity-0', 'translate-y-10', 'pointer-events-none');
+            }, 2500);
+        }
+
+        function escapeHtml(str) {
+            return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+        }
+    </script>
+</body>
+</html>
