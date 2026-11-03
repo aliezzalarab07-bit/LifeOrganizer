@@ -49,8 +49,26 @@
         window.auth = auth;
         window.appId = appId;
 
+        // Load cached state immediately from localStorage for instant render
+        window.loadLocalState = function() {
+            try {
+                const saved = localStorage.getItem('life_organizer_data_v1');
+                if (saved) {
+                    const parsed = JSON.parse(saved);
+                    if (parsed.tasks) window.tasks = parsed.tasks;
+                    if (parsed.finances) window.finances = parsed.finances;
+                    if (parsed.shopping) window.shopping = parsed.shopping;
+                }
+            } catch (e) {
+                console.warn("Could not read local storage:", e);
+            }
+        };
+
         // Initialize Authentication & Firestore Realtime Sync
         async function initAuth() {
+            // Load local state first so offline/refresh works instantly
+            window.loadLocalState();
+
             try {
                 if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
                     await signInWithCustomToken(auth, __initial_auth_token);
@@ -58,7 +76,7 @@
                     await signInAnonymously(auth);
                 }
             } catch (err) {
-                console.warn("Auth initialization warning, fallback to anonymous session:", err);
+                console.warn("Auth initialization warning, fallback to local storage session:", err);
             }
         }
 
@@ -77,9 +95,13 @@
             onSnapshot(docRef, (docSnap) => {
                 if (docSnap.exists()) {
                     const data = docSnap.data();
-                    if (data.tasks) { window.tasks = data.tasks; window.renderTasks(); window.renderCalendar(); }
-                    if (data.finances) { window.finances = data.finances; window.renderFinances(); }
-                    if (data.shopping) { window.shopping = data.shopping; window.renderShopping(); }
+                    if (data.tasks) { window.tasks = data.tasks; }
+                    if (data.finances) { window.finances = data.finances; }
+                    if (data.shopping) { window.shopping = data.shopping; }
+                    
+                    // Keep local storage synchronized with cloud snapshot
+                    window.saveToLocalStorage();
+                    window.renderAll();
                 } else {
                     // Seed initial state if new document
                     window.saveToCloud();
@@ -89,7 +111,24 @@
             });
         }
 
+        window.saveToLocalStorage = function() {
+            try {
+                const payload = {
+                    tasks: window.tasks || [],
+                    finances: window.finances || [],
+                    shopping: window.shopping || [],
+                    lastSaved: new Date().toISOString()
+                };
+                localStorage.setItem('life_organizer_data_v1', JSON.stringify(payload));
+            } catch (e) {
+                console.error("Failed to write to localStorage:", e);
+            }
+        };
+
         window.saveToCloud = async function() {
+            // Always save locally first!
+            window.saveToLocalStorage();
+
             if (!window.currentUser) return;
             const uid = window.currentUser.uid;
             const docRef = doc(db, 'artifacts', appId, 'users', uid, 'data', 'organizerState');
@@ -482,36 +521,55 @@
         let isListening = false;
         let recognition = null;
 
-        window.onload = function() {
-            updateClock();
-            setInterval(updateClock, 1000);
-            setupDateDisplay();
-            initVoiceRecognition();
-            
-            // Set default date input for tasks to today
-            document.getElementById('task-input-date').value = new Date().toISOString().split('T')[0];
-
-            renderTasks();
-            renderFinances();
-            renderShopping();
-            renderCalendar();
+        // Global function declarations to ensure availability in window.onload
+        window.updateClock = function() {
+            const now = new Date();
+            const clockEl = document.getElementById('live-clock');
+            if (clockEl) {
+                clockEl.innerText = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            }
         };
 
-        function updateClock() {
+        window.setupDateDisplay = function() {
             const now = new Date();
-            document.getElementById('live-clock').innerText = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        }
-
-        function setupDateDisplay() {
-            const now = new Date();
-            document.getElementById('current-date-label').innerText = now.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+            const dateLabel = document.getElementById('current-date-label');
+            if (dateLabel) {
+                dateLabel.innerText = now.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+            }
             
             const hour = now.getHours();
             let greeting = 'Good Morning';
             if (hour >= 12 && hour < 17) greeting = 'Good Afternoon';
             else if (hour >= 17) greeting = 'Good Evening';
-            document.getElementById('greeting-text').innerText = `${greeting}, Ready for today?`;
-        }
+            
+            const greetingEl = document.getElementById('greeting-text');
+            if (greetingEl) {
+                greetingEl.innerText = `${greeting}, Ready for today?`;
+            }
+        };
+
+        window.onload = function() {
+            window.updateClock();
+            setInterval(window.updateClock, 1000);
+            window.setupDateDisplay();
+            window.initVoiceRecognition();
+            
+            // Set default date input for tasks to today
+            const taskDateInput = document.getElementById('task-input-date');
+            if (taskDateInput) {
+                taskDateInput.value = new Date().toISOString().split('T')[0];
+            }
+
+            // Render whatever was loaded from localStorage or defaults
+            window.renderAll();
+        };
+
+        window.renderAll = function() {
+            if (window.renderTasks) window.renderTasks();
+            if (window.renderFinances) window.renderFinances();
+            if (window.renderShopping) window.renderShopping();
+            if (window.renderCalendar) window.renderCalendar();
+        };
 
         // Tab Switcher
         window.switchTab = function(tabName) {
@@ -871,7 +929,7 @@
         };
 
         // --- VOICE COMMAND LOGIC (Web Speech API) ---
-        function initVoiceRecognition() {
+        window.initVoiceRecognition = function() {
             const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
             if (!SpeechRecognition) {
                 console.warn("Speech Recognition not supported on this browser.");
@@ -885,14 +943,20 @@
 
             recognition.onstart = function() {
                 isListening = true;
-                document.getElementById('voice-banner').classList.remove('hidden');
-                document.getElementById('mic-status-badge').innerText = "Listening...";
-                document.getElementById('mic-status-badge').className = "text-[10px] bg-rose-500 text-white px-2 py-0.5 rounded-full animate-pulse";
+                const banner = document.getElementById('voice-banner');
+                if (banner) banner.classList.remove('hidden');
+                
+                const badge = document.getElementById('mic-status-badge');
+                if (badge) {
+                    badge.innerText = "Listening...";
+                    badge.className = "text-[10px] bg-rose-500 text-white px-2 py-0.5 rounded-full animate-pulse";
+                }
             };
 
             recognition.onresult = function(event) {
                 const transcript = event.results[0][0].transcript.toLowerCase().trim();
-                document.getElementById('voice-transcript').innerText = `"${transcript}"`;
+                const transcriptEl = document.getElementById('voice-transcript');
+                if (transcriptEl) transcriptEl.innerText = `"${transcript}"`;
                 processVoiceCommand(transcript);
             };
 
@@ -903,7 +967,7 @@
             recognition.onend = function() {
                 stopVoice();
             };
-        }
+        };
 
         window.toggleVoiceAssistant = function() {
             if (!recognition) {
